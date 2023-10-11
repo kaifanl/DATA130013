@@ -1,0 +1,273 @@
+---
+title: "Time series analysis on Shanghai license plate price"
+author: "Mei Wangyi 20307110042"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Library and data
+
+```{r, warning=FALSE, message=FALSE}
+library(astsa)
+library(ggplot2)
+library(dplyr)
+library(directlabels)
+library(forecast)
+library(fGarch)
+library(MASS)
+```
+
+
+```{r}
+data <- read.csv('Shanghai license plate price.csv')
+head(data)
+summary(data)
+```
+
+## Exploring the data
+
+```{r}
+ts.plot(data$lowest.price, ylab="lowest.price", 
+        main = "Lowest price and average price")
+lines(data$avg.price, col = "red", lty = 2, lwd = 1.2)
+legend("bottomright", legend = c("lowest price", "average price"),
+       col = c("black", "red"), lty = c(1, 2))
+
+ts.plot(diff(data$lowest.price), ylab = "Differenced price", 
+        main = "Differenced lowest price and average price")
+lines(diff(data$avg.price), col = "red", lty = 2, lwd = 1.2)
+legend("topright", legend = c("lowest price", "average price"),
+       col = c("black", "red"), lty = c(1, 2))
+
+ts.plot(abs(diff(data$avg.price)), ylab = "Price",
+        main = "Absolute value of differenced average price")
+```
+
+```{r}
+len <- length(data$lowest.price)
+max(abs(data$lowest.price[144:len] - data$avg.price[144:len]))
+max(abs(diff(data$lowest.price)[144:len-1] - diff(data$avg.price)[144:len-1]))
+```
+
+
+We can find out that the lowest price and the average price are very close to each other, especially after 2014 when the largest difference is within 300 yuan.
+
+
+```{r}
+ts.plot(data$Total.number.of.applicants, ylab = "number")
+lines(data$Total.number.of.license.issued, col = "blue")
+abline(v = 144)
+legend("topleft", legend = c("number of applicants", "number of license"), 
+       col = c("black", "blue"), lty = c(1, 1), )
+
+
+ts.plot(data$Total.number.of.license.issued / data$Total.number.of.applicants, 
+        ylab = "ratio", main = "winning rate")
+abline(v = 144)
+```
+At around 2014, the number of applicants dramatically increased. However, the number of license is significantly lower than the number of applicants. Thus, the winning rate dropped significantly. Under this supply and demand relationship, the average price also upsurged.
+
+Then we will explore the yearly pattern, seasonal and the monthly pattern of the data.
+
+First, we do the data cleaning:
+
+```{r}
+t <- as.character.Date(data$Date)
+t <- strsplit(as.character(t), "-", fixed=TRUE)
+
+for(i in 1:len){
+  data$year[i] <- as.numeric(t[[i]][1]) + 2000
+  data$month[i] <- substr(t[[i]][2], 1, 3)
+  if(data$month[i] %in% c("Mar", "Apr", "May"))
+    data$season[i] <- "Spring"
+  else if(data$month[i] %in% c("Jun", "Jul", "Aug"))
+    data$season[i] <- "Summer"
+  else if(data$month[i] %in% c("Sep", "Oct", "Nov"))
+    data$season[i] <- "Autumn"
+  else if(data$month[i] %in% c("Dec", "Jan", "Feb"))
+    data$season[i] <- "Winter"
+}
+```
+
+### Yearly pattern
+
+```{r}
+data$year <- factor(data$year, levels = seq(2002, 2023))
+ggplot(data, aes(x = month, y = avg.price, colour = year, group = year)) + 
+  geom_point() + geom_line() + 
+  theme_minimal() + 
+  geom_dl(aes(label = year), method = list("first.points", rot = 45, alpha = 0.6, 
+                                           cex = 0.8)) + 
+  scale_y_continuous(breaks = seq(10000, 100000, 10000)) + 
+  labs(x = "Months", y = "Average price")
+
+ggplot(data, aes(x = year, y = avg.price, colour = month, group = month)) + 
+  geom_point() + geom_line() + 
+  theme_minimal() + 
+  geom_dl(aes(label = month), method = list("smart.grid", rot = 45, alpha = 0.6, 
+                                           cex = 0.8)) + 
+  scale_y_continuous(breaks = seq(10000, 100000, 10000)) + 
+  labs(x = "Years", y = "Average price")
+```
+
+We can see that the yearly pattern of average prices in different months are around the same as the general trend which may explain the result in the similar distribution of monthly average prices across the 22 years.
+
+```{r}
+data$year <- factor(data$year, levels = seq(2002, 2023))
+ggplot(data) + 
+  geom_density(aes(x = avg.price, fill = year), alpha = 0.6) + 
+  facet_wrap(data$year) + 
+  theme_minimal() + 
+  coord_cartesian(ylim = c(0, 0.0002)) + 
+  guides(fill = "none") + 
+  labs(x = "Average price", y = "Density") + 
+  ggtitle("Average car license plate price per year")
+
+ggplot(data) + 
+  geom_density(aes(x = Total.number.of.applicants, fill = year), alpha = 0.6) + 
+  facet_wrap(data$year) + 
+  theme_minimal() + 
+  coord_cartesian(ylim = c(0, 1e-4)) + 
+  guides(fill = "none") + 
+  labs(x = "Number of applicants", y = "Density") + 
+  ggtitle("Number of applicants per year")
+```
+
+### Seasonal pattern
+
+```{r}
+data$season <- factor(data$season, levels = c("Spring", "Summer", 
+                                              "Autumn", "Winter"))
+ggplot(data) + 
+  geom_density(aes(x = avg.price, fill = season), alpha = 0.6) + 
+  facet_wrap(data$season) + 
+  theme_minimal() + 
+  guides(fill = "none") + 
+  labs(x = "Average price", y = "Density") + 
+  ggtitle("Average car license plate price per season")
+
+ggplot(data) + 
+  geom_density(aes(x = Total.number.of.applicants, fill = season), alpha = 0.6) + 
+  facet_wrap(data$season) + 
+  theme_minimal() + 
+  guides(fill = "none") + 
+  labs(x = "Number of applicants", y = "Density") + 
+  ggtitle("Number of applicants per season")
+```
+
+
+### Monthly pattern
+
+```{r}
+data$month <- factor(data$month, 
+                     levels = c("Jan","Feb","Mar","Apr","May","Jun","Jul", 
+                                "Aug","Sep","Oct","Nov","Dec"))
+ggplot(data) + 
+  geom_density(aes(x = avg.price, fill = month), alpha = 0.6) + 
+  facet_wrap(data$month) + 
+  theme_minimal() + 
+  labs(x = "Price", y = "Density") + 
+  ggtitle("Average car license plate price per month") + 
+  guides(fill = "none")
+
+ggplot(data) + 
+  geom_density(aes(x = Total.number.of.applicants, fill = month), alpha = 0.6) + 
+  facet_wrap(data$month) + 
+  theme_minimal() + 
+  labs(x = "Number of applicants", y = "Density") + 
+  ggtitle("Number of applicants price per month") + 
+  guides(fill = "none")
+```
+
+## Models
+
+### Linear model
+
+```{r, message=FALSE}
+ggplot(data, aes(x = Total.number.of.applicants, y = lowest.price)) + 
+  geom_point(colour = "lightgreen") + 
+  theme_minimal() + 
+  labs(x = "Number of applicants", y = "Lowest price")
+
+linear <- data[data$Total.number.of.applicants >= 1e5,]
+ln <- lm(lowest.price ~ Total.number.of.applicants + 
+           Total.number.of.license.issued, linear)
+summary(ln)
+
+ggplot(ln, aes(x = Total.number.of.applicants, y = lowest.price)) + 
+  geom_point(color = "lightgreen") + 
+  stat_smooth(color = "violetred2", method = "lm") + 
+  theme_minimal()+
+  labs(x = "Number of applicants", y = "Lowest price of car license plate", 
+       title = "Number of applicants vs Lowest price of car license plate")
+```
+
+### ARIMA
+
+Splitting the dataset, use the last 60 data as validation set
+
+```{r}
+diff.avg <- diff(head(data$avg.price, -60))
+ts.plot(diff.avg)
+acf(diff.avg, main = "Differenced average price of license plate price")
+pacf(diff.avg, main = "Differenced average price of license plate price")
+```
+
+
+```{r}
+fit <- auto.arima(head(data$avg.price, -60), max.p = 3, max.q = 3, max.d = 3)
+summary(fit)
+autoplot(fit)
+```
+We will take fit2 as the model to predict.
+
+```{r}
+fore <- forecast(fit, h = 60)
+autoplot(fore)
+accuracy(fore, tail(data$avg.price, 60))
+checkresiduals(fore)
+```
+
+```{r}
+fore7 <- forecast(fit, h = 7)
+autoplot(fore7)
+accuracy(fore7, tail(data$avg.price, 7))
+checkresiduals(fore7)
+```
+
+
+### ARIMA+GARCH
+
+```{r}
+garch.fit <- garchFit(formula = ~ arma(0, 2)+garch(1, 0), 
+                      data=head(diff(data$avg.price), -60))
+ts.plot(residuals(garch.fit))
+
+pred <- predict(garch.fit, n.ahead=60, mse="cond", plot=TRUE)
+len <- length(data$avg.price)
+pred.data <- data$avg.price[len - 60] + cumsum(pred$meanForecast)
+accuracy(pred.data, tail(data$avg.price, 60))
+accuracy(fore, tail(data$avg.price, 60))
+
+```
+
+
+```{r}
+acf(diff(data$avg.price)^2, main = "ACF of squared differenced average price")
+garch.fit <- garchFit(formula = ~ arma(0, 2)+garch(1, 0), 
+                      data=head(diff(data$avg.price), -7))
+ts.plot(residuals(garch.fit))
+```
+
+```{r}
+pred <- predict(garch.fit, n.ahead=7, mse="cond", plot=TRUE)
+len <- length(data$avg.price)
+pred.data <- data$avg.price[len - 7] + cumsum(pred$meanForecast)
+accuracy(pred.data, tail(data$avg.price, 7))
+accuracy(fore7, tail(data$avg.price, 7))
+```
+
